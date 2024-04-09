@@ -1,0 +1,7 @@
+.idea/
+__pycache__/
+datasets/
+images/
+lightning_logs/
+runs/
+saved_model.ckpt
