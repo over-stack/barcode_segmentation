@@ -6,6 +6,7 @@ import torch
 from torch.nn import functional as F
 from utils import Mode
 from config import Settings
+import torchvision
 
 
 class BarcodeDataset(Dataset):
@@ -34,7 +35,17 @@ class BarcodeDataset(Dataset):
                 image = transformed['image']
                 mask = transformed['mask']
 
-            return image, mask[::4, ::4].to(dtype=torch.int8)
+            resize_transform = torchvision.transforms.Resize((mask.shape[0] // Settings.output_downscale,
+                                                              mask.shape[1] // Settings.output_downscale),
+                                                             interpolation=torchvision.transforms.InterpolationMode(
+                                                                 'nearest'))
+
+            mask = resize_transform(mask.unsqueeze(0)).to(dtype=torch.int64)
+            mask = F.one_hot(mask).permute(0, 3, 1, 2).squeeze(0)
+
+            n_objects = torch.tensor(mask.shape[0])
+
+            return image, mask, n_objects
         else:
             if self.transform:
                 image = self.transform(image=image)['image']
