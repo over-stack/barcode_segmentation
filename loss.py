@@ -1,6 +1,5 @@
 import torch
 from torch import nn
-from torch.autograd import Variable
 from torch.nn import functional as F
 
 import config
@@ -17,8 +16,8 @@ class DetectionClassificationLoss(nn.Module):
         self.alpha = alpha
 
     def forward(self, y_pred: torch.Tensor, y: torch.Tensor):
-        y_positive_mask = (y[:, 0] != 0).to(dtype=torch.float32, device=y.device)
         y_bin_logit = y_pred[:, 0]
+        y_positive_mask = (y[:, 0] == 0).to(dtype=torch.float32, device=y.device)  # not background (bg_ch == 0)
 
         detection_bin_crossentropy_loss = self.bin_loss(y_bin_logit, y_positive_mask)
         detection_positive_loss = (detection_bin_crossentropy_loss * y_positive_mask).mean()
@@ -35,8 +34,8 @@ class DetectionClassificationLoss(nn.Module):
             self.weight_negative * detection_negative_loss + \
             self.weight_k_worst_negative * detection_k_worst_negative_loss
 
-        class_loss = self.class_loss(F.softmax(y_pred[:, 1:], dim=1), y.argmax(dim=1) - 1)
-        class_loss = (class_loss * y_positive_mask).sum() / max(y_positive_mask.sum(), 1)
+        class_loss = self.class_loss(F.softmax(y_pred[:, 1:], dim=1), y[:, 1:].to(y_pred.dtype))
+        class_loss = (class_loss * y_positive_mask).sum() / positive_pixels_count
 
         total_loss = detection_loss + self.alpha * class_loss
 
@@ -44,8 +43,8 @@ class DetectionClassificationLoss(nn.Module):
 
 
 class DiscriminativeLoss(nn.Module):
-    def __init__(self, delta_var, delta_dist, norm,
-                 size_average=True, reduce=True):
+    def __init__(self, delta_var, delta_dist, norm, var_term_weight=1.0, dist_term_weight=1.0, reg_term_weight=0.001,
+                 reduce=True):
         super(DiscriminativeLoss, self).__init__()
         self.reduce = reduce
 
@@ -53,9 +52,9 @@ class DiscriminativeLoss(nn.Module):
         self.delta_dist = float(delta_dist)
         self.norm = int(norm)
 
-        self.alpha = 1.0
-        self.beta = 1.0
-        self.gamma = 0.001
+        self.var_term_weight = var_term_weight
+        self.dist_term_weight = dist_term_weight
+        self.reg_term_weight = reg_term_weight
 
         assert self.norm in [1, 2]
 
@@ -77,7 +76,7 @@ class DiscriminativeLoss(nn.Module):
         dist_term = calculate_distance_term(cluster_means, n_objects, self.delta_dist, self.norm)
         reg_term = calculate_regularization_term(cluster_means, n_objects, self.norm)
 
-        loss = self.alpha * var_term + self.beta * dist_term + self.gamma * reg_term
+        loss = self.var_term_weight * var_term + self.dist_term_weight * dist_term + self.reg_term_weight * reg_term
 
         return loss
 

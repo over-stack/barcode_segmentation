@@ -144,7 +144,7 @@ def visualize_embeddings(y_pred: torch.Tensor, y_pred_post: torch.Tensor, means:
 
 def postprocess_objects(prediction: torch.Tensor, min_object_area: int = 20):
     prediction = prediction.detach().to('cpu')
-    objects_masks = (prediction[:, 0] != 1)
+    objects_masks = (prediction[:, 0] == 0)
     classes = prediction.argmax(dim=1).numpy()
 
     result = list()
