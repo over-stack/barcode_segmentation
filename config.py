@@ -11,7 +11,7 @@ class Settings:
     batch_size = 64
     num_workers = 4
     pin_memory = gpu_available
-    height, width = 512, 512
+    height, width = 480, 640
     lr = 1e-4
     weight_decay = 1e-5
     num_epochs = 500
@@ -21,7 +21,7 @@ class Settings:
     train_steps_per_epoch = 0
     model_name = 'model_v1.0.0'
     model_path = 'saved_model.ckpt'
-    dataset_path = 'datasets/barcode_segmentation'
+    dataset_path = 'datasets/muenster_barcode_db'
     eps = 1e-9
 
     delta_var = 0.5
@@ -29,3 +29,6 @@ class Settings:
     norm = 2
     output_downscale = 4
 
+    class_colors = list([torch.tensor(color) for color in [
+        (0, 0, 0), (255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (255, 0, 255), (0, 255, 255)
+    ]])

@@ -6,3 +6,4 @@ lightning_logs/
 runs/
 saved_model.ckpt
 experiments.py
+myfile.py

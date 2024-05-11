@@ -1,21 +1,24 @@
 import torch
 from torch import nn
 from torch.autograd import Variable
+from torch.nn import functional as F
 
 import config
 
 
 class DetectionClassificationLoss(nn.Module):
-    def __init__(self):
+    def __init__(self, weight_positive=15, weight_negative=1, weight_k_worst_negative=5, alpha=1):
         super().__init__()
         self.bin_loss = nn.BCEWithLogitsLoss(reduction='none')
-        self.class_loss = nn.CrossEntropyLoss()
+        self.class_loss = nn.CrossEntropyLoss(reduction='none')
+        self.weight_positive = weight_positive
+        self.weight_negative = weight_negative
+        self.weight_k_worst_negative = weight_k_worst_negative
+        self.alpha = alpha
 
-    def forward(self, y_pred, y):
-        y_positive_mask = (y != 0).to(dtype=torch.float32, device=y.device)
-
-        y_bin_logit = y_pred[:, 1]
-        y_class_logit = y_pred[:, 1:]
+    def forward(self, y_pred: torch.Tensor, y: torch.Tensor):
+        y_positive_mask = (y[:, 0] != 0).to(dtype=torch.float32, device=y.device)
+        y_bin_logit = y_pred[:, 0]
 
         detection_bin_crossentropy_loss = self.bin_loss(y_bin_logit, y_positive_mask)
         detection_positive_loss = (detection_bin_crossentropy_loss * y_positive_mask).mean()
@@ -27,17 +30,15 @@ class DetectionClassificationLoss(nn.Module):
         detection_k_worst_negative_loss = detection_k_worst_negative_loss.mean()
         detection_negative_loss = detection_negative_loss.mean()
 
-        weight_positive, weight_negative, weight_k_worst_negative = 15, 1, 5
         detection_loss = \
-            weight_positive * detection_positive_loss + \
-            weight_negative * detection_negative_loss + \
-            weight_k_worst_negative * detection_k_worst_negative_loss
+            self.weight_positive * detection_positive_loss + \
+            self.weight_negative * detection_negative_loss + \
+            self.weight_k_worst_negative * detection_k_worst_negative_loss
 
-        target = ((y - 1) * y_positive_mask).to(dtype=torch.long)
-        class_loss = self.class_loss(y_class_logit * y_positive_mask, target)
+        class_loss = self.class_loss(F.softmax(y_pred[:, 1:], dim=1), y.argmax(dim=1) - 1)
+        class_loss = (class_loss * y_positive_mask).sum() / max(y_positive_mask.sum(), 1)
 
-        alpha = 1
-        total_loss = detection_loss + alpha * class_loss
+        total_loss = detection_loss + self.alpha * class_loss
 
         return total_loss
 

@@ -67,7 +67,7 @@ class BaseConv2D(nn.Module):
 
 class Model(nn.Module):
 
-    def __init__(self, in_channels, num_classes, num_filters):
+    def __init__(self, in_channels, num_classes, embedding_dims, num_filters):
         super().__init__()
 
         # Downscale module
@@ -84,7 +84,8 @@ class Model(nn.Module):
         self.ct_conv5 = BaseConv2D(num_filters, num_filters, stride=1, dilation=1)
 
         # Final
-        self.fn_conv = nn.Conv2d(num_filters, num_classes + 1, kernel_size=1)
+        self.base_conv = nn.Conv2d(num_filters, num_classes + 1, kernel_size=1)
+        self.embed_conv = nn.Conv2d(num_filters, embedding_dims, kernel_size=1)
 
     def forward(self, x):
         x = self.ds_conv1(x)
@@ -97,7 +98,8 @@ class Model(nn.Module):
         x = self.ct_conv4(x)
         x = self.ct_conv5(x)
 
-        out = self.fn_conv(x)
+        base_out = self.base_conv(x)
+        embeddings_out = self.embed_conv(x)
 
-        return out
+        return base_out, embeddings_out
 

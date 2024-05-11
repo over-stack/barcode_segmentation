@@ -25,9 +25,8 @@ class BarcodeDataset(Dataset):
 
         image_path = os.path.join(self.images_path, filename)
         image = np.array(Image.open(image_path).convert('RGB'))
-
         if self.mode != Mode.TEST:
-            mask_path = os.path.join(self.masks_path, filename)
+            mask_path = os.path.join(self.masks_path, filename[:-3] + 'png')
             mask = np.array(Image.open(mask_path).convert('L')) // 255
 
             if self.transform:
@@ -42,6 +41,7 @@ class BarcodeDataset(Dataset):
 
             mask = resize_transform(mask.unsqueeze(0)).to(dtype=torch.int64)
             mask = F.one_hot(mask).permute(0, 3, 1, 2).squeeze(0)
+            # (for future) CrossEntropyLoss is faster with indices (not one-hot)
 
             n_objects = torch.tensor(mask.shape[0])
 
