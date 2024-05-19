@@ -11,9 +11,11 @@ from torch.utils.data import DataLoader
 import config
 from config import Settings
 from utils import get_train_transform, get_test_transform
-from dataset import BarcodeDataset
-from utils import (set_deterministic, get_train_transform, get_test_transform, Mode, visualize_input, visualize_output,
-                   postporcess_base, postprocess_embeddings, postprocess_objects, visualize_embeddings)
+from dataset import BarcodeDataset, BarcodeDatasetXML
+from utils import (set_deterministic, get_train_transform, get_test_transform, Mode,
+                   postporcess_base, postprocess_embeddings, postprocess_objects)
+from visualization import Visualization
+from metrics import TotalMetrics
 from loss import DetectionClassificationLoss, DiscriminativeLoss, calculate_means
 import shutil
 
@@ -28,22 +30,37 @@ class TrainingModule(pl.LightningModule):
         self.base_loss_weight = base_loss_weight
         self.embedding_loss_weight = embedding_loss_weight
 
-        self.base_loss_func = DetectionClassificationLoss()
-        self.embedding_loss_func = DiscriminativeLoss(config.Settings.delta_var, config.Settings.delta_dist,
-                                                      config.Settings.norm)
+        self.base_loss_func = DetectionClassificationLoss(
+            Settings.weight_positive, Settings.weight_negative, Settings.weight_k_worst_negative,
+            Settings.detection_loss_weight, Settings.classification_loss_weight, None
+        )
+        self.embedding_loss_func = DiscriminativeLoss(
+            Settings.delta_var, Settings.delta_dist, Settings.norm,
+            Settings.var_term_weight, Settings.dist_term_weight, Settings.reg_term_weight, None
+        )
+        self.visualization = Visualization(n_cols=5, n_rows=2)
 
+        self.train_metrics_base = TotalMetrics(iou_thresholds=[0.5])
+        self.train_metrics_embed = TotalMetrics(iou_thresholds=[0.5])
+        self.validation_metrics_base = TotalMetrics(iou_thresholds=[0.5])
+        self.validation_metrics_embed = TotalMetrics(iou_thresholds=[0.5])
+
+        # for means calculation (on last train epoch, before grad step), using on eval epoch
         self.total_means_sum: torch.Tensor | None = None  # !!! set zero after epoch
-        self.total_means_count: int = 0  # !!! set zero after epoch
-        self.on_validation = False
+        self.total_batches_count: int = 0  # !!! set zero after epoch
+        self.on_validation = False  # validation is running
 
         torch.set_float32_matmul_precision('medium')
 
     def training_step(self, batch, batch_idx):
         x, y, n_objects = batch
+        # x = batch['image']
+        # y = batch['mask']
+        # n_objects = batch['n_objects']
 
         if self.on_validation:
             self.total_means_sum = None
-            self.total_means_count = 0
+            self.total_batches_count = 0
             self.on_validation = False
 
         base_pred, embeddings_pred = self.model(x)
@@ -52,21 +69,35 @@ class TrainingModule(pl.LightningModule):
         embedding_loss = self.embedding_loss_func(embeddings_pred, y, n_objects)
         total_loss = self.base_loss_weight * base_loss + self.embedding_loss_weight * embedding_loss
 
-        metrics = {'train_total_loss': total_loss}
-        self.log_dict(metrics, prog_bar=True, on_step=True, on_epoch=True, logger=False)
-
         with torch.no_grad():
+            '''base_pred_post = postporcess_base(base_pred)
+            pred_masks_base, pred_boxes_base, pred_labels_base = postprocess_objects(
+                base_pred_post, min_object_area=Settings.min_object_area
+            )
+            _, target_boxes, target_labels = postprocess_objects(
+                y, min_object_area=Settings.min_object_area
+            )
+
+            self.train_metrics.update(
+                y[:, 1:], target_boxes, target_labels, pred_masks_base[:, 1:], pred_boxes_base, pred_labels_base
+            )'''
+
             batch_means = calculate_means(embeddings_pred, y, n_objects, not_from_loss=True).mean(dim=0)
             if self.total_means_sum is None:
                 self.total_means_sum = torch.zeros(batch_means.shape, device=self.device)
-                # print(batch_means.shape)
             self.total_means_sum += batch_means
-            self.total_means_count += 1
+            self.total_batches_count += 1
+
+        metrics = {'train_total_loss': total_loss}
+        self.log_dict(metrics, prog_bar=True, on_step=True, on_epoch=True, logger=False)
 
         return total_loss
 
     def validation_step(self, batch, batch_idx):
         x, y, n_objects = batch
+        # x = batch['image']
+        # y = batch['mask']
+        # n_objects = batch['n_objects']
 
         if not self.on_validation:
             self.on_validation = True
@@ -77,28 +108,50 @@ class TrainingModule(pl.LightningModule):
         embedding_loss = self.embedding_loss_func(embeddings_pred, y, n_objects)
         total_loss = self.base_loss_weight * base_loss + self.embedding_loss_weight * embedding_loss
 
+        with torch.no_grad():
+            base_pred_post = postporcess_base(base_pred)
+            pred_masks_base, pred_boxes_base, pred_labels_base = postprocess_objects(
+                base_pred_post, min_object_area=Settings.min_object_area
+            )
+            _, target_boxes, target_labels = postprocess_objects(
+                y, min_object_area=Settings.min_object_area
+            )
+
+            self.validation_metrics_base.update(
+                y[:, 1:], target_boxes, target_labels, pred_masks_base[:, 1:], pred_boxes_base, pred_labels_base
+            )
+
+            if self.total_means_sum is not None and True:
+                means = self.total_means_sum / self.total_batches_count
+                embeddings_pred_post = postprocess_embeddings(
+                    embeddings_pred, means, n_instances=y.shape[1], bandwidth=Settings.delta_var, norm=Settings.norm
+                )
+                pred_masks_embed, pred_boxes_embed, pred_labels_embed = postprocess_objects(
+                    embeddings_pred_post, min_object_area=20
+                )
+                self.validation_metrics_embed.update(
+                    y[:, 1:], target_boxes, target_labels, pred_masks_embed[:, 1:], pred_boxes_embed, pred_labels_embed
+                )
+
+                self.visualization.visualize(
+                    x, y, batch_idx, base_pred_post, pred_masks_base, embeddings_pred_post, pred_masks_embed,
+                    embeddings_pred, means
+                )
+
         metrics = {'val_total_loss': total_loss}
         self.log_dict(metrics, prog_bar=True, on_step=True, on_epoch=True, logger=False)
 
-        # batch_idx % 4 == 0
-        if True and self.total_means_sum is not None:
-            with torch.no_grad():
-                means = self.total_means_sum / self.total_means_count
-                base_pred_post = postporcess_base(base_pred)
-                embeddings_pred_post = postprocess_embeddings(embeddings_pred, means,
-                                                              n_instances=y.shape[1], bandwidth=Settings.delta_var,
-                                                              norm=Settings.norm)
-                visualize_input(x, batch_idx, 'input')
-                visualize_output(y, batch_idx, 'output')
-                visualize_output(base_pred_post, batch_idx, 'pred_base')
-                visualize_output(postprocess_objects(base_pred_post, min_object_area=20),
-                                 batch_idx, 'pred_base_objs')
-                visualize_output(embeddings_pred_post, batch_idx, 'pred_embed')
-                visualize_output(postprocess_objects(embeddings_pred_post, min_object_area=20),
-                                 batch_idx, 'pred_embed_objs')
-                visualize_embeddings(embeddings_pred, embeddings_pred_post, means, batch_idx, 'viz_embed')
-
         return total_loss
+
+    def on_validation_epoch_end(self):
+        epoch_metrics_base = self.validation_metrics_base.compute()
+        epoch_metrics_embed = self.validation_metrics_embed.compute()
+        print()
+        print('Base:', epoch_metrics_base)
+        print('Embed:', epoch_metrics_embed)
+        print()
+        self.validation_metrics_base.reset()
+        self.validation_metrics_embed.reset()
 
     def predict_step(self, batch, batch_idx):
         thresh = 0.5
@@ -114,8 +167,8 @@ class TrainingModule(pl.LightningModule):
         lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
             mode='min',
-            factor=0.1,
-            patience=2,
+            factor=Settings.lr_reduce_factor,
+            patience=Settings.lr_reduce_patience,
         )
 
         return {
@@ -132,15 +185,20 @@ def train_model(model, base_loss_weight, embedding_loss_weight):
     if Settings.seed is not None:
         set_deterministic(Settings.seed)
 
-    filenames = sorted(os.listdir(Settings.dataset_path + '/IMAGES'))
+    filenames = sorted(os.listdir(Settings.dataset_path + '/Image'))
+    # filenames = sorted(os.listdir(Settings.dataset_path + '/IMAGES'))
     train_filenames, val_filenames = train_test_split(filenames, train_size=0.8, shuffle=True,
                                                       random_state=Settings.seed)
     train_transform = get_train_transform()
     test_transform = get_test_transform()
-    train_dataset = BarcodeDataset(Mode.TRAIN, Settings.dataset_path + '/IMAGES', Settings.dataset_path + '/MASKS',
+    train_dataset = BarcodeDatasetXML(Mode.TRAIN, Settings.dataset_path + '/Image', Settings.dataset_path + '/Markup',
+                                      train_filenames, train_transform)
+    val_dataset = BarcodeDatasetXML(Mode.VAL, Settings.dataset_path + '/Image', Settings.dataset_path + '/Markup',
+                                    val_filenames, test_transform)
+    '''train_dataset = BarcodeDataset(Mode.TRAIN, Settings.dataset_path + '/IMAGES', Settings.dataset_path + '/MASKS',
                                    train_filenames, train_transform)
     val_dataset = BarcodeDataset(Mode.VAL, Settings.dataset_path + '/IMAGES', Settings.dataset_path + '/MASKS',
-                                 val_filenames, test_transform)
+                                 val_filenames, test_transform)'''
 
     train_dataloader = DataLoader(train_dataset, batch_size=Settings.batch_size,
                                   shuffle=True, num_workers=Settings.num_workers,
@@ -148,8 +206,6 @@ def train_model(model, base_loss_weight, embedding_loss_weight):
     validation_dataloader = DataLoader(val_dataset, batch_size=Settings.batch_size,
                                        shuffle=False, num_workers=Settings.num_workers,
                                        pin_memory=Settings.pin_memory, persistent_workers=True)
-
-    Settings.train_steps_per_epoch = len(train_dataloader)
 
     earlystopping_callback = EarlyStopping(
         monitor='val_total_loss',

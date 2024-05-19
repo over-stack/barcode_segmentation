@@ -21,8 +21,15 @@ from albumentations.augmentations import functional as AF
 
 def main():
     # num_classes without background
-    model = Model(3, 1, 2, 24)
-    train_model(model, base_loss_weight=1, embedding_loss_weight=1)
+    model = Model(Settings.in_channels, Settings.num_classes, Settings.embedding_dims, Settings.num_filters)
+    train_model(model, Settings.base_loss_weight, Settings.embedding_loss_weight)
+
+    # prediction channels:
+    # 0 - objects mask (inverse background)
+    # 1 ... n - classes masks
+
+    # target channels:
+    # 0 ... n - classes - masks (0 - background mask)
 
 
 if __name__ == "__main__":
