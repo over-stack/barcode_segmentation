@@ -1,4 +1,5 @@
 import os
+import time
 
 import torch
 from sklearn.model_selection import train_test_split
@@ -38,25 +39,26 @@ class TrainingModule(pl.LightningModule):
             Settings.delta_var, Settings.delta_dist, Settings.norm,
             Settings.var_term_weight, Settings.dist_term_weight, Settings.reg_term_weight, None
         )
-        self.visualization = Visualization(n_cols=5, n_rows=2)
+        self.visualization = Visualization(n_cols=Settings.n_cols, n_rows=Settings.n_rows)
 
-        self.train_metrics_base = TotalMetrics(iou_thresholds=[0.5])
-        self.train_metrics_embed = TotalMetrics(iou_thresholds=[0.5])
-        self.validation_metrics_base = TotalMetrics(iou_thresholds=[0.5])
-        self.validation_metrics_embed = TotalMetrics(iou_thresholds=[0.5])
+        self.train_metrics_base = TotalMetrics(iou_thresholds=Settings.metrics_thresholds)
+        self.train_metrics_embed = TotalMetrics(iou_thresholds=Settings.metrics_thresholds)
+        self.validation_metrics_base = TotalMetrics(iou_thresholds=Settings.metrics_thresholds)
+        self.validation_metrics_embed = TotalMetrics(iou_thresholds=Settings.metrics_thresholds)
 
         # for means calculation (on last train epoch, before grad step), using on eval epoch
         self.total_means_sum: torch.Tensor | None = None  # !!! set zero after epoch
         self.total_batches_count: int = 0  # !!! set zero after epoch
         self.on_validation = False  # validation is running
 
+        self.sum_mean_inference_time_base = 0.0
+        self.sum_mean_inference_time_embed = 0.0
+        self.validation_steps_count = 0
+
         torch.set_float32_matmul_precision('medium')
 
     def training_step(self, batch, batch_idx):
         x, y, n_objects = batch
-        # x = batch['image']
-        # y = batch['mask']
-        # n_objects = batch['n_objects']
 
         if self.on_validation:
             self.total_means_sum = None
@@ -95,9 +97,6 @@ class TrainingModule(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         x, y, n_objects = batch
-        # x = batch['image']
-        # y = batch['mask']
-        # n_objects = batch['n_objects']
 
         if not self.on_validation:
             self.on_validation = True
@@ -109,23 +108,30 @@ class TrainingModule(pl.LightningModule):
         total_loss = self.base_loss_weight * base_loss + self.embedding_loss_weight * embedding_loss
 
         with torch.no_grad():
+            self.validation_steps_count += 1
+            base_inference_time = time.time()
             base_pred_post = postporcess_base(base_pred, Settings.postprocessing_threshold)
+            base_inference_time = 1000 * (time.time() - base_inference_time) / x.shape[0]
+            self.sum_mean_inference_time_base += base_inference_time
+
             pred_masks_base, pred_boxes_base, pred_labels_base = postprocess_objects(
                 base_pred_post, min_object_area=Settings.min_object_area
             )
             _, target_boxes, target_labels = postprocess_objects(
                 y, min_object_area=Settings.min_object_area
             )
-
             self.validation_metrics_base.update(
                 y[:, 1:], target_boxes, target_labels, pred_masks_base[:, 1:], pred_boxes_base, pred_labels_base
             )
 
             if self.total_means_sum is not None and True:
                 means = self.total_means_sum / self.total_batches_count
+                embed_inference_time = time.time()
                 embeddings_pred_post = postprocess_embeddings(
                     embeddings_pred, means, n_instances=y.shape[1], bandwidth=Settings.delta_var, norm=Settings.norm
                 )
+                embed_inference_time = 1000 * (time.time() - embed_inference_time) / x.shape[0]
+                self.sum_mean_inference_time_embed += embed_inference_time
                 pred_masks_embed, pred_boxes_embed, pred_labels_embed = postprocess_objects(
                     embeddings_pred_post, min_object_area=20
                 )
@@ -149,11 +155,17 @@ class TrainingModule(pl.LightningModule):
         print()
         print('Base:', epoch_metrics_base)
         print('Embed:', epoch_metrics_embed)
+        print(f'Base inference time: {self.sum_mean_inference_time_base / self.validation_steps_count :.6f}')
+        print(f'Embed inference time: {self.sum_mean_inference_time_embed / self.validation_steps_count :.6f}')
         print()
         self.validation_metrics_base.reset()
         self.validation_metrics_embed.reset()
+        self.sum_mean_inference_time_base = 0
+        self.sum_mean_inference_time_embed = 0
+        self.validation_steps_count = 0
 
     def predict_step(self, batch, batch_idx):
+        # TODO: update this function
         thresh = 0.5
         x = batch
         y_bin_logit, y_class_logit = self.model(x)

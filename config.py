@@ -9,6 +9,9 @@ class Settings:
     log_every_n_steps = 5
     eps = 1e-9
 
+    metrics_thresholds = [0.5]
+    n_cols, n_rows = 5, 2
+
     model_name = 'model_v1.0.0'
     model_path = 'saved_model.ckpt'
     # dataset_path = 'datasets/muenster_barcode_db'
@@ -57,7 +60,7 @@ class Settings:
 
     # total loss
     base_loss_weight = 1
-    embedding_loss_weight = 0.3
+    embedding_loss_weight = 0.05
 
     classes = {'EAN13': 1, 'PDF417': 2, 'DataMatrix': 3, 'QRCode': 4, 'RoyalMailCode': 5, 'Kix': 6,
                'Code128': 7, 'UPCA': 8, 'Aztec': 9, 'Interleaved25': 10, 'JapanPost': 11, 'Code39': 12,
