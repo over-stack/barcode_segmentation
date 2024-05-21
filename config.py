@@ -6,6 +6,7 @@ class Settings:
     accelerator = 'gpu' if gpu_available else 'cpu'
     device = 'cuda' if gpu_available else 'cpu'
     pin_memory = gpu_available
+    log_every_n_steps = 5
     eps = 1e-9
 
     model_name = 'model_v1.0.0'
@@ -18,24 +19,25 @@ class Settings:
 
     height, width = 512, 512
     output_downscale = 4
-    num_epochs = 500
-    batch_size = 32
     num_workers = 4
-    log_every_n_steps = 5
-    early_stopping_patience = 20
-    seed = 4
-    min_object_area = 20
 
-    in_channels = 3
-    # num_classes = 18  # without background
+    in_channels = 3  # without background   (18)
     num_classes = 1
     embedding_dims = 2
     num_filters = 24
 
-    lr = 1e-3
-    weight_decay = 1e-5
-    lr_reduce_factor = 0.1
+    num_epochs = 500
+    batch_size = 64
+
+    lr = 1e-2
+    # add different learning rate for other loss function
+    weight_decay = 1e-7
+    lr_reduce_factor = 0.5
     lr_reduce_patience = 3
+    early_stopping_patience = 10
+    seed = 4
+
+    min_object_area = 30
 
     # classification-detection loss
     weight_positive = 15
@@ -43,18 +45,19 @@ class Settings:
     weight_k_worst_negative = 5
     detection_loss_weight = 1
     classification_loss_weight = 1
+    postprocessing_threshold = 0.5
 
     # discriminative loss
     delta_var = 0.5
-    delta_dist = 1.5
-    norm = 2
-    var_term_weight = 1.0
-    dist_term_weight = 1.0
+    delta_dist = 3
+    var_term_weight = 1
+    dist_term_weight = 2
     reg_term_weight = 0.001
+    norm = 2
 
     # total loss
     base_loss_weight = 1
-    embedding_loss_weight = 1
+    embedding_loss_weight = 0.3
 
     classes = {'EAN13': 1, 'PDF417': 2, 'DataMatrix': 3, 'QRCode': 4, 'RoyalMailCode': 5, 'Kix': 6,
                'Code128': 7, 'UPCA': 8, 'Aztec': 9, 'Interleaved25': 10, 'JapanPost': 11, 'Code39': 12,

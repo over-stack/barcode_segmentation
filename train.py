@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 
 import config
 from config import Settings
-from utils import get_train_transform, get_test_transform
+from utils import get_train_transform, get_test_transform, seed_worker
 from dataset import BarcodeDataset, BarcodeDatasetXML
 from utils import (set_deterministic, get_train_transform, get_test_transform, Mode,
                    postporcess_base, postprocess_embeddings, postprocess_objects)
@@ -109,7 +109,7 @@ class TrainingModule(pl.LightningModule):
         total_loss = self.base_loss_weight * base_loss + self.embedding_loss_weight * embedding_loss
 
         with torch.no_grad():
-            base_pred_post = postporcess_base(base_pred)
+            base_pred_post = postporcess_base(base_pred, Settings.postprocessing_threshold)
             pred_masks_base, pred_boxes_base, pred_labels_base = postprocess_objects(
                 base_pred_post, min_object_area=Settings.min_object_area
             )
@@ -199,13 +199,17 @@ def train_model(model, base_loss_weight, embedding_loss_weight):
                                    train_filenames, train_transform)
     val_dataset = BarcodeDataset(Mode.VAL, Settings.dataset_path + '/IMAGES', Settings.dataset_path + '/MASKS',
                                  val_filenames, test_transform)'''
+    g = torch.Generator()
+    g.manual_seed(Settings.seed)
 
-    train_dataloader = DataLoader(train_dataset, batch_size=Settings.batch_size,
-                                  shuffle=True, num_workers=Settings.num_workers,
-                                  pin_memory=Settings.pin_memory, persistent_workers=True)
-    validation_dataloader = DataLoader(val_dataset, batch_size=Settings.batch_size,
-                                       shuffle=False, num_workers=Settings.num_workers,
-                                       pin_memory=Settings.pin_memory, persistent_workers=True)
+    train_dataloader = DataLoader(
+        train_dataset, batch_size=Settings.batch_size, shuffle=True, num_workers=Settings.num_workers,
+        pin_memory=Settings.pin_memory, persistent_workers=True, worker_init_fn=seed_worker, generator=g
+    )
+    validation_dataloader = DataLoader(
+        val_dataset, batch_size=Settings.batch_size, shuffle=False, num_workers=Settings.num_workers,
+        pin_memory=Settings.pin_memory, persistent_workers=True, worker_init_fn=seed_worker, generator=g
+    )
 
     earlystopping_callback = EarlyStopping(
         monitor='val_total_loss',
